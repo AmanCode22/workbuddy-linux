@@ -19,10 +19,16 @@
 #
 # Usage:
 #   ./assemble-app.sh --zip WorkBuddy-darwin-x64-<v>.zip [--electron-ver X] \
-#                     --stage /path/to/stage [--repo /path/to/repo]
+#                     --stage /path/to/stage [--repo /path/to/repo] [--skip-patch]
 #
 # If --zip is omitted it is downloaded from the official update API
 # (platform=workbuddy-darwin-x64 — the Intel channel).
+#
+# By default the staged app.asar is patched right after being copied
+# (scripts/patch-credential-bootstrap.py: renames WORKBUDDY_AT_REST_ENCRYPTION
+# to a same-length dummy key so the bundled CLI starts in "standalone" mode
+# instead of failing with CREDENTIAL_BOOTSTRAP_FAILED on vanilla Electron).
+# Pass --skip-patch to build without it.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -30,6 +36,7 @@ ZIP=""
 STAGE=""
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 ELECTRON_VER=""
+SKIP_PATCH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --stage) STAGE="$2"; shift 2 ;;
     --electron-ver) ELECTRON_VER="$2"; shift 2 ;;
     --repo) REPO="$2"; shift 2 ;;
+    --skip-patch) SKIP_PATCH=1 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -100,6 +108,14 @@ ln -sf workbuddyai "$STAGE/opt/WorkBuddy AI/electron"
 # --- 4. drop in the application payload -------------------------------------
 cp "$APP_CONTENTS/Resources/app.asar" "$STAGE/opt/WorkBuddy AI/resources/"
 cp -a "$APP_CONTENTS/Resources/app.asar.unpacked" "$STAGE/opt/WorkBuddy AI/resources/"
+
+# --- 4b. patch the credential-bootstrap env key (CREDENTIAL_BOOTSTRAP_FAILED fix)
+if [[ -n "$SKIP_PATCH" ]]; then
+  echo "[assemble] skipping credential-bootstrap patch (--skip-patch)"
+else
+  python3 "$REPO/scripts/patch-credential-bootstrap.py" \
+    "$STAGE/opt/WorkBuddy AI/resources/app.asar"
+fi
 
 # --- 5. desktop entry + icons (extracted from the official Linux 5.5.2 deb) --
 mkdir -p "$STAGE/usr/share/applications"
