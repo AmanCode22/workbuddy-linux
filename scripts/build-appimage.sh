@@ -30,14 +30,10 @@ cp "$STAGE/usr/share/icons/hicolor/512x512/apps/workbuddyai.png" \
    "$APPDIR/usr/share/icons/hicolor/512x512/apps/workbuddyai.png"
 ln -sf workbuddyai.png "$APPDIR/.DirIcon"
 
-# AppStream metadata (silences appimagetool's upstream-metadata warning)
-REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-if [[ -f "$REPO_ROOT/packaging/flatpak/metainfo.xml" ]]; then
-  mkdir -p "$APPDIR/usr/share/metainfo"
-  sed -e 's/com\.tencent\.WorkBuddy/workbuddyai/g' \
-      -e 's/com\.tencent\.WorkBuddy\.desktop/workbuddyai.desktop/g' \
-      "$REPO_ROOT/packaging/flatpak/metainfo.xml" > "$APPDIR/usr/share/metainfo/workbuddyai.appdata.xml"
-fi
+# NOTE: no AppStream metadata in the AppDir on purpose. appstreamcli fails the
+# build on the non-rdns app id (workbuddyai — matches Tencent's official
+# packages) and flag support (--no-appstream) varies between appimagetool
+# builds. Without metadata, appimagetool only prints a cosmetic warning.
 
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/bash
@@ -68,10 +64,8 @@ chmod 755 "$APPDIR/AppRun"
 # non-rdns app id (workbuddyai, matching Tencent's official packages) makes
 # appstreamcli fail validation; skip it — AppStream is optional for AppImages.
 if command -v appimagetool >/dev/null 2>&1; then
-  appimagetool "$APPDIR" "$OUT/WorkBuddy-$VER-linux-x86_64.AppImage"
   appimagetool --no-appstream "$APPDIR" "$OUT/WorkBuddy-$VER-linux-x86_64.AppImage"
 elif [[ -x "$HOME/squashfs-root/AppRun" ]]; then
-  "$HOME/squashfs-root/AppRun" "$APPDIR" "$OUT/WorkBuddy-$VER-linux-x86_64.AppImage"
   "$HOME/squashfs-root/AppRun" --no-appstream "$APPDIR" "$OUT/WorkBuddy-$VER-linux-x86_64.AppImage"
 else
   echo "appimagetool not found" >&2; exit 1
