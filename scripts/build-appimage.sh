@@ -64,10 +64,15 @@ chmod 755 "$APPDIR"
 chmod -R a+rX "$APPDIR"
 chmod 755 "$APPDIR/AppRun"
 
+# --no-appstream: our metadata ships in usr/share/metainfo but the legacy
+# non-rdns app id (workbuddyai, matching Tencent's official packages) makes
+# appstreamcli fail validation; skip it — AppStream is optional for AppImages.
 if command -v appimagetool >/dev/null 2>&1; then
   appimagetool "$APPDIR" "$OUT/WorkBuddy-$VER-linux-x86_64.AppImage"
+  appimagetool --no-appstream "$APPDIR" "$OUT/WorkBuddy-$VER-linux-x86_64.AppImage"
 elif [[ -x "$HOME/squashfs-root/AppRun" ]]; then
   "$HOME/squashfs-root/AppRun" "$APPDIR" "$OUT/WorkBuddy-$VER-linux-x86_64.AppImage"
+  "$HOME/squashfs-root/AppRun" --no-appstream "$APPDIR" "$OUT/WorkBuddy-$VER-linux-x86_64.AppImage"
 else
   echo "appimagetool not found" >&2; exit 1
 fi
