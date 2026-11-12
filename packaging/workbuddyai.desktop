@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=WorkBuddy AI
+Exec="/opt/WorkBuddy AI/workbuddyai" %U
+Terminal=false
+Type=Application
+Icon=workbuddyai
+StartupWMClass=WorkBuddy AI
+Comment=WorkBuddy Desktop - AI Agent Desktop Application
+MimeType=x-scheme-handler/workbuddy-ai;
+Categories=Development;

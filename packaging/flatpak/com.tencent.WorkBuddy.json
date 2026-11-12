@@ -1,0 +1,59 @@
+{
+    "app-id": "com.tencent.WorkBuddy",
+    "runtime": "org.freedesktop.Platform",
+    "runtime-version": "24.08",
+    "sdk": "org.freedesktop.Sdk",
+    "command": "workbuddyai",
+    "separate-locales": false,
+    "finish-args": [
+        "--share=ipc",
+        "--share=network",
+        "--socket=x11",
+        "--socket=wayland",
+        "--socket=pulseaudio",
+        "--device=dri",
+        "--filesystem=home",
+        "--filesystem=xdg-run/keyring",
+        "--talk-name=org.freedesktop.Notifications",
+        "--talk-name=org.freedesktop.secrets",
+        "--talk-name=org.kde.StatusNotifierWatcher",
+        "--env=XCURSOR_PATH=/run/host/share/icons"
+    ],
+    "modules": [
+        {
+            "name": "workbuddyai",
+            "buildsystem": "simple",
+            "build-commands": [
+                "mkdir -p /app/opt",
+                "cp -a WorkBuddy /app/opt/WorkBuddy AI",
+                "chmod 755 '/app/opt/WorkBuddy AI/chrome-sandbox' || true",
+                "mkdir -p /app/bin /app/share/applications /app/share/icons/hicolor",
+                "for s in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do mkdir -p /app/share/icons/hicolor/$s/apps && cp icons/$s/workbuddyai.png /app/share/icons/hicolor/$s/apps/com.tencent.WorkBuddy.png; done",
+                "cp workbuddyai.desktop /app/share/applications/com.tencent.WorkBuddy.desktop",
+                "desktop-file-edit --set-key=Icon --set-value=com.tencent.WorkBuddy --set-key=Exec --set-value=workbuddyai /app/share/applications/com.tencent.WorkBuddy.desktop",
+                "cat > /app/bin/workbuddyai <<'WRAPPER'\n#!/bin/bash\nexec \"/app/opt/WorkBuddy AI/workbuddyai\" --no-sandbox \"$@\"\nWRAPPER\nchmod 755 /app/bin/workbuddyai",
+                "install -Dm644 metainfo.xml /app/share/metainfo/com.tencent.WorkBuddy.metainfo.xml"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "app",
+                    "dest": "WorkBuddy"
+                },
+                {
+                    "type": "dir",
+                    "path": "icons-prepared",
+                    "dest": "icons"
+                },
+                {
+                    "type": "file",
+                    "path": "workbuddyai.desktop"
+                },
+                {
+                    "type": "file",
+                    "path": "metainfo.xml"
+                }
+            ]
+        }
+    ]
+}

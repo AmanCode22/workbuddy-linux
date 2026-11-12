@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.tencent.WorkBuddy</id>
+  <name>WorkBuddy AI</name>
+  <summary>Full-scenario AI office agent workbench by the Tencent CodeBuddy team</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary=https://www.workbuddy.ai</project_license>
+  <developer_name>Tencent (unofficial Linux port by AmanCode22)</developer_name>
+  <url type="homepage">https://www.workbuddy.ai</url>
+  <launchable type="desktop-id">com.tencent.WorkBuddy.desktop</launchable>
+  <content_rating type="oars-1.1" />
+  <description>
+    <p>
+      WorkBuddy is Tencent's full-scenario AI office agent workbench from the
+      CodeBuddy team: chat with agents, delegate coding/document/browser tasks,
+      and orchestrate multi-agent workflows.
+    </p>
+    <p>
+      This Flatpak is an UNOFFICIAL native Linux build assembled from Tencent's
+      official x86_64 distribution resources (Electron runtime). Not affiliated
+      with or endorsed by Tencent.
+    </p>
+  </description>
+  <releases>
+    <release version="5.9.4" date="2026-11-12">
+      <description><p>Upstream 5.9.4 (Intel darwin-x64 resources, Electron 37.10.3 linux-x64).</p></description>
+    </release>
+  </releases>
+</component>

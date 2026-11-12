@@ -1,0 +1,294 @@
+name: WorkBuddy native Linux port (x86_64)
+
+# ---------------------------------------------------------------------------
+# WorkBuddy (Tencent, CodeBuddy team) is an Electron app (electron-builder,
+# NOT Tauri). The official darwin-x64 (Intel) distribution already ships every
+# Linux prebuilt native module (node-pty-linux-x64, os-bridge-linux-x64-gnu,
+# koffi linux-x64 prebuilds) plus Linux main-process code
+# (update-service.linux.js, appimage-self-update.js).
+#
+# Native Linux port = app.asar + app.asar.unpacked from the official
+# darwin-x64 ZIP + the official Electron linux-x64 runtime of the same
+# version. No Wine, no patching. Port by AmanCode22 <amanady125@gmail.com>.
+#
+# Pipeline: resolve (official update API) -> assemble (smoke tested under
+# Xvfb) -> package [deb | rpm | appimage | flatpak] -> release.
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "WorkBuddy version, e.g. 5.9.4 (empty = auto-detect via update API)"
+        required: false
+        default: ""
+      electron_version:
+        description: "Electron runtime version to pair (empty = auto-detect from the zip)"
+        required: false
+        default: ""
+      make_release:
+        description: "Also publish a GitHub release with all artifacts"
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: "0 18 * * *" # nightly: build whatever upstream ships next
+
+permissions:
+  contents: write
+
+env:
+  UPDATE_API: https://www.workbuddy.ai/v2/update?platform=workbuddy-darwin-x64
+  # Fallback channel (used only if the Intel query fails):
+  UPDATE_API_ARM: https://www.workbuddy.ai/v2/update?platform=workbuddy-darwin-arm64
+  PACKAGER: "AmanCode22 <amanady125@gmail.com>"
+
+jobs:
+  resolve:
+    name: Resolve latest version via update API
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.detect.outputs.version }}
+      url: ${{ steps.detect.outputs.url }}
+      electron: ${{ steps.detect.outputs.electron }}
+    steps:
+      - name: Detect latest Intel (darwin-x64) build
+        id: detect
+        env:
+          MANUAL: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          meta="$(curl -fsSL --max-time 60 "$UPDATE_API" \
+                  || curl -fsSL --max-time 60 "$UPDATE_API_ARM")"
+          echo "API says: $meta"
+          version="${MANUAL:-$(echo "$meta" | jq -r .version)}"
+          [[ -n "$version" && "$version" != "null" ]] || {
+            echo "::error::could not resolve version"; exit 1; }
+          major_minor="$(echo "$version" | cut -d. -f1-3)"
+          if [[ -n "$MANUAL" ]]; then
+            # manual version: rebuild the CDN URL for the Intel channel
+            url="https://download.codebuddy.ai/workbuddy/saas/darwin-x64/WorkBuddy-darwin-x64-${version}.zip"
+          else
+            url="$(echo "$meta" | jq -r .url)"
+          fi
+          echo "version=$version"  >> "$GITHUB_OUTPUT"
+          echo "url=$url"          >> "$GITHUB_OUTPUT"
+          echo "electron=${{ inputs.electron_version }}" >> "$GITHUB_OUTPUT"
+
+  assemble:
+    name: Assemble + smoke test native Linux build
+    needs: resolve
+    runs-on: ubuntu-latest
+    outputs:
+      electron: ${{ steps.ele.outputs.electron }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb xz-utils jq zstd p7zip-full python3
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Download official darwin-x64 (Intel) distribution
+        run: |
+          curl -fL --retry 3 --max-time 1800 -o wb-darwin-x64.zip \
+            "${{ needs.resolve.outputs.url }}"
+          ls -lh wb-darwin-x64.zip
+
+      - name: Assemble Linux app tree
+        id: ele
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/assemble-app.sh \
+            --zip "$PWD/wb-darwin-x64.zip" \
+            --stage "$PWD/stage" \
+            --electron-ver "${{ inputs.electron_version }}" \
+            --repo "$PWD" 2>&1 | tee assemble.log
+          ELECTRON="$(grep -oP 'upstream Electron version: \K.*' assemble.log | tail -n1)"
+          echo "electron=$ELECTRON" >> "$GITHUB_OUTPUT"
+          echo "Assembled with Electron $ELECTRON"
+
+      - name: Headless smoke test (Xvfb)
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.workbuddy/binaries/node/versions/22.22.2-6/bin \
+                   ~/.workbuddy/binaries/python/versions/3.13.12/bin
+          ln -sf "$(command -v node)" \
+            ~/.workbuddy/binaries/node/versions/22.22.2-6/bin/node || true
+          ln -sf "$(command -v python3)" \
+            ~/.workbuddy/binaries/python/versions/3.13.12/bin/python3 || true
+          Xvfb :99 -screen 0 1440x900x24 &
+          export DISPLAY=:99
+          sleep 2
+          timeout 60 "./stage/opt/WorkBuddy AI/workbuddyai" \
+            --no-sandbox --disable-dev-shm-usage \
+            --use-gl=swiftshader --enable-unsafe-swiftshader > smoke.log 2>&1 || true
+          grep -q "UpdateService.linux" smoke.log \
+            && echo "SMOKE TEST PASSED (Linux update service booted)" \
+            || { echo "::error::smoke test failed"; tail -50 smoke.log; exit 1; }
+
+      - name: Pack stage artifact
+        run: tar -I zstd -cf stage.tar.zst -C "$PWD" stage
+
+      - name: Upload stage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-${{ needs.resolve.outputs.version }}
+          path: stage.tar.zst
+          if-no-files-found: error
+          retention-days: 3
+
+  package-deb:
+    name: DEB (Debian/Ubuntu)
+    needs: [resolve, assemble]
+    runs-on: ubuntu-latest
+    env:
+      VER: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage-${{ needs.resolve.outputs.version }}
+      - run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq zstd
+          tar -I zstd -xf stage.tar.zst
+          chmod +x scripts/*.sh
+          mkdir -p dist
+          sudo -E env STAGE="$PWD/stage" OUT="$PWD/dist" VER="$VER" \
+            PACKAGER="$PACKAGER" bash scripts/build-deb.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ needs.resolve.outputs.version }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  package-rpm:
+    name: RPM (Fedora/RHEL)
+    needs: [resolve, assemble]
+    runs-on: ubuntu-latest
+    env:
+      VER: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage-${{ needs.resolve.outputs.version }}
+      - run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq zstd rpm
+          tar -I zstd -xf stage.tar.zst
+          chmod +x scripts/*.sh
+          mkdir -p dist
+          STAGE="$PWD/stage" OUT="$PWD/dist" VER="$VER" \
+            PACKAGER="$PACKAGER" bash scripts/build-rpm.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ needs.resolve.outputs.version }}
+          path: dist/*.rpm
+          if-no-files-found: error
+
+  package-appimage:
+    name: AppImage (universal)
+    needs: [resolve, assemble]
+    runs-on: ubuntu-latest
+    env:
+      VER: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage-${{ needs.resolve.outputs.version }}
+      - run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq zstd libfuse2 || true
+          tar -I zstd -xf stage.tar.zst
+          chmod +x scripts/*.sh
+          curl -fsSL -o "$HOME/appimagetool.AppImage" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$HOME/appimagetool.AppImage"
+          cd "$HOME" && ./appimagetool.AppImage --appimage-extract >/dev/null
+          # build-appimage.sh falls back to $HOME/squashfs-root/AppRun
+          cd - >/dev/null
+          mkdir -p dist
+          STAGE="$PWD/stage" OUT="$PWD/dist" VER="$VER" bash scripts/build-appimage.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage-${{ needs.resolve.outputs.version }}
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  package-flatpak:
+    name: Flatpak (universal sandboxed)
+    needs: [resolve, assemble]
+    runs-on: ubuntu-latest
+    env:
+      VER: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage-${{ needs.resolve.outputs.version }}
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd flatpak flatpak-builder
+          tar -I zstd -xf stage.tar.zst
+          chmod +x scripts/*.sh
+          mkdir -p dist
+          STAGE="$PWD/stage" OUT="$PWD/dist" VER="$VER" REPO_ROOT="$PWD" \
+            bash scripts/build-flatpak.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-${{ needs.resolve.outputs.version }}
+          path: dist/*.flatpak
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [resolve, package-deb, package-rpm, package-appimage, package-flatpak]
+    if: inputs.make_release == true || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          pattern: "*-${{ needs.resolve.outputs.version }}"
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          find . -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.flatpak' \) \
+            -exec sha256sum {} \; > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: workbuddy-${{ needs.resolve.outputs.version }}-linux
+          name: WorkBuddy ${{ needs.resolve.outputs.version }} — native Linux port (x86_64)
+          body: |
+            Unofficial **native** Linux build of Tencent WorkBuddy
+            (${{ needs.resolve.outputs.version }}) — Electron runtime + official
+            app resources from the **Intel (darwin-x64)** channel. No Wine.
+
+            | Package | Install |
+            |---|---|
+            | DEB | `sudo apt install ./workbuddyai-*.deb` |
+            | RPM | `sudo dnf install ./workbuddyai-*.rpm` |
+            | AppImage | `chmod +x WorkBuddy-*.AppImage && ./WorkBuddy-*.AppImage` |
+            | Flatpak | `flatpak install ./WorkBuddy-*.flatpak` |
+
+            Notes:
+            - First launch downloads the AI agent runtimes (Node via npmmirror,
+              Python via python-build-standalone) for Linux.
+            - Port by **AmanCode22** <amanady125@gmail.com>.
+            - Not affiliated with or endorsed by Tencent. Verify SHA256SUMS.
+          files: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
+            dist/*.flatpak
+            dist/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
