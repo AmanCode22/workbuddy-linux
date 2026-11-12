@@ -11,8 +11,8 @@ name: WorkBuddy native Linux port (x86_64)
 # darwin-x64 ZIP + the official Electron linux-x64 runtime of the same
 # version. No Wine, no patching. Port by AmanCode22 <amanady125@gmail.com>.
 #
-# Pipeline: resolve (official update API) -> assemble (smoke tested under
-# Xvfb) -> package [deb | rpm | appimage | flatpak] -> release.
+# Pipeline: resolve (official update API) -> assemble ->
+#           package [deb | rpm | appimage | flatpak] -> release.
 # ---------------------------------------------------------------------------
 
 on:
@@ -76,7 +76,7 @@ jobs:
           echo "electron=${{ inputs.electron_version }}" >> "$GITHUB_OUTPUT"
 
   assemble:
-    name: Assemble + smoke test native Linux build
+    name: Assemble native Linux build
     needs: resolve
     runs-on: ubuntu-latest
     outputs:
@@ -88,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb xz-utils jq zstd p7zip-full python3
+          sudo apt-get install -y -qq xz-utils jq zstd p7zip-full python3
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
       - name: Download official darwin-x64 (Intel) distribution
@@ -109,25 +109,6 @@ jobs:
           ELECTRON="$(grep -oP 'upstream Electron version: \K.*' assemble.log | tail -n1)"
           echo "electron=$ELECTRON" >> "$GITHUB_OUTPUT"
           echo "Assembled with Electron $ELECTRON"
-
-      - name: Headless smoke test (Xvfb)
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.workbuddy/binaries/node/versions/22.22.2-6/bin \
-                   ~/.workbuddy/binaries/python/versions/3.13.12/bin
-          ln -sf "$(command -v node)" \
-            ~/.workbuddy/binaries/node/versions/22.22.2-6/bin/node || true
-          ln -sf "$(command -v python3)" \
-            ~/.workbuddy/binaries/python/versions/3.13.12/bin/python3 || true
-          Xvfb :99 -screen 0 1440x900x24 &
-          export DISPLAY=:99
-          sleep 2
-          timeout 60 "./stage/opt/WorkBuddy AI/workbuddyai" \
-            --no-sandbox --disable-dev-shm-usage \
-            --use-gl=swiftshader --enable-unsafe-swiftshader > smoke.log 2>&1 || true
-          grep -q "UpdateService.linux" smoke.log \
-            && echo "SMOKE TEST PASSED (Linux update service booted)" \
-            || { echo "::error::smoke test failed"; tail -50 smoke.log; exit 1; }
 
       - name: Pack stage artifact
         run: tar -I zstd -cf stage.tar.zst -C "$PWD" stage

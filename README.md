@@ -75,6 +75,14 @@ prebuilds.
 | **Flatpak** (sandboxed) | `flatpak install ./WorkBuddy-5.9.4-linux-x86_64.flatpak` |
 | **Portable tarball** | `tar -xzf WorkBuddy-5.9.4-linux-x64-portable.tar.gz && "/opt/WorkBuddy AI/workbuddyai"` |
 
+The DEB/RPM install to `/opt/WorkBuddy AI` with the official
+`workbuddyai.desktop` entry and hicolor icons (taken from Tencent's own
+official Linux 5.5.2 DEB, mirrored in `packaging/`).
+
+Prebuilt artifacts for v5.9.4 (upstream build `42593613`, Electron 37.10.3)
+are in `packages/` with SHA256SUMS. CI builds every future version
+automatically.
+
 ## CI (GitHub Actions)
 
 `.github/workflows/workbuddy-fedora.yml` fully automates the port:
