@@ -1,86 +1,185 @@
+
 name: WorkBuddy native Linux port (x86_64)
 
 # ---------------------------------------------------------------------------
-# WorkBuddy (Tencent, CodeBuddy team) is an Electron app (electron-builder,
-# NOT Tauri). The official darwin-x64 (Intel) distribution already ships every
-# Linux prebuilt native module (node-pty-linux-x64, os-bridge-linux-x64-gnu,
-# koffi linux-x64 prebuilds) plus Linux main-process code
-# (update-service.linux.js, appimage-self-update.js).
+# WorkBuddy (Tencent, CodeBuddy team) is an Electron app.
 #
-# Native Linux port = app.asar + app.asar.unpacked from the official
-# darwin-x64 ZIP + the official Electron linux-x64 runtime of the same
-# version. No Wine, no patching. Port by AmanCode22 <amanady125@gmail.com>.
+# Native Linux port:
+#   Official darwin-x64 ZIP + official Electron linux-x64 runtime.
 #
-# Pipeline: resolve (official update API) -> assemble ->
-#           package [deb | rpm | appimage | flatpak] -> release.
+# Pipeline:
+#   resolve -> check-version -> assemble
+#   -> package [deb | rpm | appimage | flatpak]
+#   -> mark-built -> release
+#
+# Version-aware:
+#   - Already built version: skip all packaging jobs.
+#   - New version: build all packages.
+#   - Force rebuild: rebuild even if version exists.
+#   - make_release: build if not yet released.
 # ---------------------------------------------------------------------------
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "WorkBuddy version, e.g. 5.9.4 (empty = auto-detect via update API)"
+        description: "WorkBuddy version (empty = auto-detect)"
         required: false
         default: ""
+
       electron_version:
-        description: "Electron runtime version to pair (empty = auto-detect from the zip)"
+        description: "Electron runtime version (empty = auto-detect)"
         required: false
         default: ""
+
       make_release:
-        description: "Also publish a GitHub release with all artifacts"
+        description: "Publish a GitHub release"
         type: boolean
         required: false
         default: false
+
+      force_rebuild:
+        description: "Force rebuild even if this version was already built"
+        type: boolean
+        required: false
+        default: false
+
   schedule:
-    - cron: "0 18 * * *" # nightly: build whatever upstream ships next
+    - cron: "0 18 * * *"
 
 permissions:
   contents: write
 
+concurrency:
+  group: workbuddy-linux-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   UPDATE_API: https://www.workbuddy.ai/v2/update?platform=workbuddy-darwin-x64
-  # Fallback channel (used only if the Intel query fails):
   UPDATE_API_ARM: https://www.workbuddy.ai/v2/update?platform=workbuddy-darwin-arm64
   PACKAGER: "AmanCode22 <amanady125@gmail.com>"
 
 jobs:
+
+  # -------------------------------------------------------------------------
+  # 1. Resolve upstream version
+  # -------------------------------------------------------------------------
+
   resolve:
-    name: Resolve latest version via update API
+    name: Resolve latest version
     runs-on: ubuntu-latest
+
     outputs:
       version: ${{ steps.detect.outputs.version }}
       url: ${{ steps.detect.outputs.url }}
       electron: ${{ steps.detect.outputs.electron }}
+
     steps:
-      - name: Detect latest Intel (darwin-x64) build
+      - name: Detect upstream version
         id: detect
         env:
           MANUAL: ${{ inputs.version }}
+          ELECTRON_MANUAL: ${{ inputs.electron_version }}
         run: |
           set -euo pipefail
+
           meta="$(curl -fsSL --max-time 60 "$UPDATE_API" \
-                  || curl -fsSL --max-time 60 "$UPDATE_API_ARM")"
+            || curl -fsSL --max-time 60 "$UPDATE_API_ARM")"
+
           echo "API says: $meta"
+
           version="${MANUAL:-$(echo "$meta" | jq -r .version)}"
+
           [[ -n "$version" && "$version" != "null" ]] || {
-            echo "::error::could not resolve version"; exit 1; }
-          major_minor="$(echo "$version" | cut -d. -f1-3)"
+            echo "::error::Could not resolve version"
+            exit 1
+          }
+
           if [[ -n "$MANUAL" ]]; then
-            # manual version: rebuild the CDN URL for the Intel channel
             url="https://download.codebuddy.ai/workbuddy/saas/darwin-x64/WorkBuddy-darwin-x64-${version}.zip"
           else
             url="$(echo "$meta" | jq -r .url)"
           fi
-          echo "version=$version"  >> "$GITHUB_OUTPUT"
-          echo "url=$url"          >> "$GITHUB_OUTPUT"
-          echo "electron=${{ inputs.electron_version }}" >> "$GITHUB_OUTPUT"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "electron=$ELECTRON_MANUAL" >> "$GITHUB_OUTPUT"
+
+          echo "Resolved WorkBuddy version: $version"
+
+  # -------------------------------------------------------------------------
+  # 2. Check whether version has already been built/released
+  # -------------------------------------------------------------------------
+
+  check-version:
+    name: Check existing build
+    needs: resolve
+    runs-on: ubuntu-latest
+
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+
+    steps:
+      - name: Check build marker and release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+          FORCE: ${{ inputs.force_rebuild }}
+          MAKE_RELEASE: ${{ inputs.make_release }}
+        run: |
+          set -euo pipefail
+
+          TAG="workbuddy-build-$VERSION"
+          RELEASE_TAG="workbuddy-$VERSION-linux"
+
+          if [[ "$FORCE" == "true" ]]; then
+            echo "::notice::Force rebuild enabled"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Existing published release: nothing to rebuild.
+          if gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+
+            echo "::notice::Version $VERSION is already released"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Existing build marker: skip unless a release is requested.
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" \
+            >/dev/null 2>&1; then
+
+            if [[ "$MAKE_RELEASE" == "true" ]]; then
+              echo "::notice::Build exists, but release is missing. Rebuilding."
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::Version $VERSION already built. Skipping."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
+
+            exit 0
+          fi
+
+          echo "No existing build found. Building."
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+  # -------------------------------------------------------------------------
+  # 3. Assemble application
+  # -------------------------------------------------------------------------
 
   assemble:
     name: Assemble native Linux build
-    needs: resolve
+    needs: [resolve, check-version]
+    if: needs.check-version.outputs.skip != 'true'
+
     runs-on: ubuntu-latest
+
     outputs:
       electron: ${{ steps.ele.outputs.electron }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -89,34 +188,50 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq xz-utils jq zstd p7zip-full python3
-          echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Download official darwin-x64 (Intel) distribution
+      - name: Download official darwin-x64 distribution
         run: |
-          curl -fL --retry 3 --max-time 1800 -o wb-darwin-x64.zip \
+          curl -fL --retry 3 --max-time 1800 \
+            -o wb-darwin-x64.zip \
             "${{ needs.resolve.outputs.url }}"
+
           ls -lh wb-darwin-x64.zip
 
       - name: Assemble Linux app tree
         id: ele
         run: |
-          set -o pipefail
+          set -euo pipefail
+
           chmod +x scripts/*.sh
+
           ./scripts/assemble-app.sh \
             --zip "$PWD/wb-darwin-x64.zip" \
             --stage "$PWD/stage" \
             --electron-ver "${{ inputs.electron_version }}" \
             --repo "$PWD" 2>&1 | tee assemble.log
-          ELECTRON="$(grep -oP 'upstream Electron version: \K.*' assemble.log | tail -n1)"
-          [[ -n "$ELECTRON" ]] || { echo "::error::could not detect Electron version"; exit 1; }
+
+          ELECTRON="$(grep -oP \
+            'upstream Electron version: \K.*' \
+            assemble.log | tail -n1)"
+
+          [[ -n "$ELECTRON" ]] || {
+            echo "::error::Could not detect Electron version"
+            exit 1
+          }
+
           [[ -f "stage/opt/WorkBuddy AI/workbuddyai" ]] || {
-            echo "::error::workbuddyai binary missing from assembled tree"; exit 1; }
+            echo "::error::Application binary missing"
+            exit 1
+          }
+
           echo "electron=$ELECTRON" >> "$GITHUB_OUTPUT"
+
           echo "Assembled with Electron $ELECTRON"
 
       - name: Pack stage artifact
         run: |
-          [[ -d stage ]] || { echo "::error::stage directory missing"; exit 1; }
+          [[ -d stage ]] || exit 1
+
           tar -I zstd -cf stage.tar.zst -C "$PWD" stage
 
       - name: Upload stage artifact
@@ -127,113 +242,265 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # -------------------------------------------------------------------------
+  # 4. DEB
+  # -------------------------------------------------------------------------
+
   package-deb:
     name: DEB (Debian/Ubuntu)
-    needs: [resolve, assemble]
+    needs: [resolve, check-version, assemble]
+    if: needs.check-version.outputs.skip != 'true'
+
     runs-on: ubuntu-latest
+
     env:
       VER: ${{ needs.resolve.outputs.version }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: stage-${{ needs.resolve.outputs.version }}
-      - run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq zstd
+
+      - name: Build DEB
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd
+
           tar -I zstd -xf stage.tar.zst
+
           chmod +x scripts/*.sh
           mkdir -p dist
-          sudo -E env STAGE="$PWD/stage" OUT="$PWD/dist" VER="$VER" \
-            PACKAGER="$PACKAGER" bash scripts/build-deb.sh
+
+          sudo -E env \
+            STAGE="$PWD/stage" \
+            OUT="$PWD/dist" \
+            VER="$VER" \
+            PACKAGER="$PACKAGER" \
+            bash scripts/build-deb.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: deb-${{ needs.resolve.outputs.version }}
           path: dist/*.deb
           if-no-files-found: error
 
+  # -------------------------------------------------------------------------
+  # 5. RPM
+  # -------------------------------------------------------------------------
+
   package-rpm:
     name: RPM (Fedora/RHEL)
-    needs: [resolve, assemble]
+    needs: [resolve, check-version, assemble]
+    if: needs.check-version.outputs.skip != 'true'
+
     runs-on: ubuntu-latest
+
     env:
       VER: ${{ needs.resolve.outputs.version }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: stage-${{ needs.resolve.outputs.version }}
-      - run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq zstd rpm
+
+      - name: Build RPM
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd rpm
+
           tar -I zstd -xf stage.tar.zst
+
           chmod +x scripts/*.sh
           mkdir -p dist
-          STAGE="$PWD/stage" OUT="$PWD/dist" VER="$VER" \
-            PACKAGER="$PACKAGER" bash scripts/build-rpm.sh
+
+          STAGE="$PWD/stage" \
+          OUT="$PWD/dist" \
+          VER="$VER" \
+          PACKAGER="$PACKAGER" \
+            bash scripts/build-rpm.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: rpm-${{ needs.resolve.outputs.version }}
           path: dist/*.rpm
           if-no-files-found: error
 
+  # -------------------------------------------------------------------------
+  # 6. APPIMAGE
+  # -------------------------------------------------------------------------
+
   package-appimage:
     name: AppImage (universal)
-    needs: [resolve, assemble]
+    needs: [resolve, check-version, assemble]
+    if: needs.check-version.outputs.skip != 'true'
+
     runs-on: ubuntu-latest
+
     env:
       VER: ${{ needs.resolve.outputs.version }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: stage-${{ needs.resolve.outputs.version }}
-      - run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq zstd libfuse2 || true
+
+      - name: Build AppImage
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd libfuse2
+
           tar -I zstd -xf stage.tar.zst
+
           chmod +x scripts/*.sh
-          curl -fsSL -o "$HOME/appimagetool.AppImage" \
+
+          curl -fsSL \
+            -o "$HOME/appimagetool.AppImage" \
             https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+
           chmod +x "$HOME/appimagetool.AppImage"
-          cd "$HOME" && ./appimagetool.AppImage --appimage-extract >/dev/null
-          # build-appimage.sh falls back to $HOME/squashfs-root/AppRun
-          cd - >/dev/null
+
+          cd "$HOME"
+          ./appimagetool.AppImage --appimage-extract >/dev/null
+          cd -
+
           mkdir -p dist
-          STAGE="$PWD/stage" OUT="$PWD/dist" VER="$VER" bash scripts/build-appimage.sh
+
+          STAGE="$PWD/stage" \
+          OUT="$PWD/dist" \
+          VER="$VER" \
+            bash scripts/build-appimage.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: appimage-${{ needs.resolve.outputs.version }}
           path: dist/*.AppImage
           if-no-files-found: error
 
+  # -------------------------------------------------------------------------
+  # 7. FLATPAK
+  # -------------------------------------------------------------------------
+
   package-flatpak:
     name: Flatpak (universal sandboxed)
-    needs: [resolve, assemble]
+    needs: [resolve, check-version, assemble]
+    if: needs.check-version.outputs.skip != 'true'
+
     runs-on: ubuntu-latest
+
     env:
       VER: ${{ needs.resolve.outputs.version }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: stage-${{ needs.resolve.outputs.version }}
-      - run: |
+
+      - name: Build Flatpak
+        run: |
+          set -euo pipefail
+
           sudo apt-get update -qq
           sudo apt-get install -y -qq zstd flatpak flatpak-builder
+
           tar -I zstd -xf stage.tar.zst
+
           chmod +x scripts/*.sh
           mkdir -p dist
-          STAGE="$PWD/stage" OUT="$PWD/dist" VER="$VER" REPO_ROOT="$PWD" \
+
+          STAGE="$PWD/stage" \
+          OUT="$PWD/dist" \
+          VER="$VER" \
+          REPO_ROOT="$PWD" \
             bash scripts/build-flatpak.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak-${{ needs.resolve.outputs.version }}
           path: dist/*.flatpak
           if-no-files-found: error
 
+  # -------------------------------------------------------------------------
+  # 8. Mark version as built
+  # -------------------------------------------------------------------------
+
+  mark-built:
+    name: Mark version as successfully built
+    needs:
+      - resolve
+      - check-version
+      - package-deb
+      - package-rpm
+      - package-appimage
+      - package-flatpak
+
+    if: needs.check-version.outputs.skip != 'true'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create or update build marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          TAG="workbuddy-build-$VERSION"
+          REF="repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG"
+
+          if gh api "$REF" >/dev/null 2>&1; then
+
+            gh api --method PATCH "$REF" \
+              -f sha="$GITHUB_SHA" \
+              -F force=true
+
+          else
+
+            gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$TAG" \
+              -f sha="$GITHUB_SHA"
+
+          fi
+
+          echo "Successfully marked $VERSION as built."
+
+  # -------------------------------------------------------------------------
+  # 9. GitHub release
+  # -------------------------------------------------------------------------
+
   release:
     name: Publish GitHub release
-    needs: [resolve, package-deb, package-rpm, package-appimage, package-flatpak]
-    if: inputs.make_release == true || startsWith(github.ref, 'refs/tags/')
+
+    needs:
+      - resolve
+      - package-deb
+      - package-rpm
+      - package-appimage
+      - package-flatpak
+
+    if: >-
+      ${{
+        inputs.make_release == true ||
+        startsWith(github.ref, 'refs/tags/')
+      }}
+
     runs-on: ubuntu-latest
+
     steps:
       - name: Download all packages
         uses: actions/download-artifact@v4
@@ -242,22 +509,45 @@ jobs:
           pattern: "*-${{ needs.resolve.outputs.version }}"
           merge-multiple: true
 
-      - name: Checksums
+      - name: Verify packages
         run: |
+          set -euo pipefail
+
+          find dist -maxdepth 1 -type f -printf '%f\n'
+
+          test -n "$(find dist -name '*.deb' -print -quit)"
+          test -n "$(find dist -name '*.rpm' -print -quit)"
+          test -n "$(find dist -name '*.AppImage' -print -quit)"
+          test -n "$(find dist -name '*.flatpak' -print -quit)"
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+
           cd dist
-          find . -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.flatpak' \) \
+
+          find . -type f \
+            \( -name '*.deb' \
+            -o -name '*.rpm' \
+            -o -name '*.AppImage' \
+            -o -name '*.flatpak' \) \
             -exec sha256sum {} \; > SHA256SUMS
+
           cat SHA256SUMS
 
-      - name: Create release
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
+
         with:
           tag_name: workbuddy-${{ needs.resolve.outputs.version }}-linux
           name: WorkBuddy ${{ needs.resolve.outputs.version }} — native Linux port (x86_64)
+
           body: |
             Unofficial **native** Linux build of Tencent WorkBuddy
-            (${{ needs.resolve.outputs.version }}) — Electron runtime + official
-            app resources from the **Intel (darwin-x64)** channel. No Wine.
+            (${{ needs.resolve.outputs.version }}) — Electron runtime +
+            official application resources from the Intel (darwin-x64) channel.
+
+            No Wine.
 
             | Package | Install |
             |---|---|
@@ -267,15 +557,19 @@ jobs:
             | Flatpak | `flatpak install ./WorkBuddy-*.flatpak` |
 
             Notes:
-            - First launch downloads the AI agent runtimes (Node via npmmirror,
-              Python via python-build-standalone) for Linux.
-            - Port by **AmanCode22** <amanady125@gmail.com>.
-            - Not affiliated with or endorsed by Tencent. Verify SHA256SUMS.
+            - First launch downloads AI agent runtimes.
+            - Node via npmmirror.
+            - Python via python-build-standalone.
+            - Port by AmanCode22.
+            - Not affiliated with or endorsed by Tencent.
+            - Verify SHA256SUMS.
+
           files: |
             dist/*.deb
             dist/*.rpm
             dist/*.AppImage
             dist/*.flatpak
             dist/SHA256SUMS
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
