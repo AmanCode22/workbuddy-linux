@@ -24,7 +24,7 @@ sed "s/5\.9\.4/$VER/g" "$FP/metainfo.xml" > "$BUILD/metainfo.xml"
 flatpak remote-add --user --if-not-exists flathub \
   https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user -y --noninteractive flathub \
-  org.freedesktop.Sdk//24.08 org.freedesktop.Platform//24.08
+  org.freedesktop.Sdk//25.08 org.freedesktop.Platform//25.08
 
 cd "$BUILD"
 flatpak-builder --user --force-clean --disable-rofiles-fuse \
