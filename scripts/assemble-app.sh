@@ -61,16 +61,30 @@ fi
 SEVENZ="$(command -v 7zz || command -v 7z)"
 [[ -n "$SEVENZ" ]] || { echo "need 7zz (7-Zip) on PATH" >&2; exit 1; }
 echo "[assemble] extracting darwin-x64 zip..."
-"$SEVENZ" x -y -o"$WORK/src" "$ZIP" >/dev/null
+# NOTE: 7-Zip exits non-zero because it refuses to recreate 11 macOS-only
+# framework symlinks inside the .app bundle ("Dangerous link ... ignored").
+# Those are irrelevant to the Linux port; tolerate the exit code but verify
+# the files we actually need exist.
+"$SEVENZ" x -y -o"$WORK/src" "$ZIP" >"$WORK/extract.log" 2>&1 || \
+  echo "[assemble] 7-Zip reported errors (expected: macOS symlink aliases)"
 APP_CONTENTS="$WORK/src/WorkBuddy AI.app/Contents"
-[[ -d "$APP_CONTENTS" ]] || { echo "unexpected zip layout" >&2; exit 1; }
+[[ -f "$APP_CONTENTS/Resources/app.asar" ]] || {
+  echo "::error::app.asar missing after extraction — unexpected zip layout" >&2
+  tail -20 "$WORK/extract.log" >&2; exit 1; }
 
 # --- 3. pair the matching Electron linux-x64 runtime ------------------------
 if [[ -z "$ELECTRON_VER" ]]; then
   ELECTRON_VER="$(python3 - <<EOF
-import plistlib
-d = plistlib.load(open("$APP_CONTENTS/Frameworks/Electron Framework.framework/Resources/Info.plist", "rb"))
-print(d["CFBundleVersion"])
+import os, plistlib, sys
+paths = [
+    "$APP_CONTENTS/Frameworks/Electron Framework.framework/Resources/Info.plist",
+    "$APP_CONTENTS/Frameworks/Electron Framework.framework/Versions/A/Resources/Info.plist",
+]
+for p in paths:
+    if os.path.exists(p):
+        print(plistlib.load(open(p, "rb"))["CFBundleVersion"])
+        sys.exit(0)
+sys.exit("Electron Framework Info.plist not found in extracted zip")
 EOF
 )"
 fi
