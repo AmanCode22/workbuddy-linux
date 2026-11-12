@@ -1,7 +1,7 @@
 {
     "app-id": "com.tencent.WorkBuddy",
     "runtime": "org.freedesktop.Platform",
-    "runtime-version": "24.08",
+    "runtime-version": "25.08",
     "sdk": "org.freedesktop.Sdk",
     "command": "workbuddyai",
     "separate-locales": false,
@@ -25,7 +25,7 @@
             "buildsystem": "simple",
             "build-commands": [
                 "mkdir -p /app/opt",
-                "cp -a WorkBuddy /app/opt/WorkBuddy AI",
+                "cp -a WorkBuddy \"/app/opt/WorkBuddy AI\"",
                 "chmod 755 '/app/opt/WorkBuddy AI/chrome-sandbox' || true",
                 "mkdir -p /app/bin /app/share/applications /app/share/icons/hicolor",
                 "for s in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do mkdir -p /app/share/icons/hicolor/$s/apps && cp icons/$s/workbuddyai.png /app/share/icons/hicolor/$s/apps/com.tencent.WorkBuddy.png; done",
