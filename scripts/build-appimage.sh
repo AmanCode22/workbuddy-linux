@@ -30,6 +30,15 @@ cp "$STAGE/usr/share/icons/hicolor/512x512/apps/workbuddyai.png" \
    "$APPDIR/usr/share/icons/hicolor/512x512/apps/workbuddyai.png"
 ln -sf workbuddyai.png "$APPDIR/.DirIcon"
 
+# AppStream metadata (silences appimagetool's upstream-metadata warning)
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+if [[ -f "$REPO_ROOT/packaging/flatpak/metainfo.xml" ]]; then
+  mkdir -p "$APPDIR/usr/share/metainfo"
+  sed -e 's/com\.tencent\.WorkBuddy/workbuddyai/g' \
+      -e 's/com\.tencent\.WorkBuddy\.desktop/workbuddyai.desktop/g' \
+      "$REPO_ROOT/packaging/flatpak/metainfo.xml" > "$APPDIR/usr/share/metainfo/workbuddyai.appdata.xml"
+fi
+
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/bash
 # WorkBuddy AI AppRun — community Linux port
@@ -47,6 +56,12 @@ fi
 export TMPDIR="${TMPDIR:-/tmp}"
 exec "$BIN" "${SANDBOX_FLAG[@]}" "$@"
 EOF
+chmod 755 "$APPDIR/AppRun"
+
+# appimagetool refuses AppDirs with mode 0700 (mktemp default) and warns on
+# every file without o+rx; make everything world-readable/executable
+chmod 755 "$APPDIR"
+chmod -R a+rX "$APPDIR"
 chmod 755 "$APPDIR/AppRun"
 
 if command -v appimagetool >/dev/null 2>&1; then

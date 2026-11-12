@@ -18,7 +18,7 @@ for s in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
   mkdir -p "$BUILD/icons-prepared/$s"
   cp "$STAGE/usr/share/icons/hicolor/$s/apps/workbuddyai.png" "$BUILD/icons-prepared/$s/"
 done
-cp "$FP/workbuddyai.desktop" "$FP/com.tencent.WorkBuddy.json" "$BUILD/"
+cp "$REPO_ROOT/packaging/workbuddyai.desktop" "$FP/com.tencent.WorkBuddy.json" "$BUILD/"
 sed "s/5\.9\.4/$VER/g" "$FP/metainfo.xml" > "$BUILD/metainfo.xml"
 
 flatpak remote-add --user --if-not-exists flathub \

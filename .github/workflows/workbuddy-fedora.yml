@@ -100,6 +100,7 @@ jobs:
       - name: Assemble Linux app tree
         id: ele
         run: |
+          set -o pipefail
           chmod +x scripts/*.sh
           ./scripts/assemble-app.sh \
             --zip "$PWD/wb-darwin-x64.zip" \
@@ -107,11 +108,16 @@ jobs:
             --electron-ver "${{ inputs.electron_version }}" \
             --repo "$PWD" 2>&1 | tee assemble.log
           ELECTRON="$(grep -oP 'upstream Electron version: \K.*' assemble.log | tail -n1)"
+          [[ -n "$ELECTRON" ]] || { echo "::error::could not detect Electron version"; exit 1; }
+          [[ -f "stage/opt/WorkBuddy AI/workbuddyai" ]] || {
+            echo "::error::workbuddyai binary missing from assembled tree"; exit 1; }
           echo "electron=$ELECTRON" >> "$GITHUB_OUTPUT"
           echo "Assembled with Electron $ELECTRON"
 
       - name: Pack stage artifact
-        run: tar -I zstd -cf stage.tar.zst -C "$PWD" stage
+        run: |
+          [[ -d stage ]] || { echo "::error::stage directory missing"; exit 1; }
+          tar -I zstd -cf stage.tar.zst -C "$PWD" stage
 
       - name: Upload stage artifact
         uses: actions/upload-artifact@v4
