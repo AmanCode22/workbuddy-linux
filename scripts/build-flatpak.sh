@@ -28,6 +28,7 @@ flatpak install --user -y --noninteractive flathub \
 
 cd "$BUILD"
 flatpak-builder --user --force-clean --disable-rofiles-fuse \
+  --default-branch="$VER" \
   --repo=fp-repo --install-deps-from=flathub fp-build com.tencent.WorkBuddy.json
 flatpak build-bundle fp-repo "$OUT/WorkBuddy-$VER-linux-x86_64.flatpak" \
   com.tencent.WorkBuddy "$VER"
